@@ -83,6 +83,53 @@ def route_demand(route: List[int], demands: Dict[int, int]) -> int:
     return sum(demands[node] for node in route if node != 0)
 
 
+def two_opt_improve_route(route: List[int], dist: List[List[float]]) -> List[int]:
+    """
+    Deterministic 2-opt improvement for a single route.
+
+    It keeps the same customers but improves their order.
+    """
+    if len(route) <= 4:
+        return route[:]
+
+    improved_route = route[:]
+    improved = True
+
+    while improved:
+        improved = False
+
+        for i in range(1, len(improved_route) - 2):
+            for j in range(i + 1, len(improved_route) - 1):
+                a = improved_route[i - 1]
+                b = improved_route[i]
+                c = improved_route[j]
+                d = improved_route[j + 1]
+
+                old_cost = dist[a][b] + dist[c][d]
+                new_cost = dist[a][c] + dist[b][d]
+
+                if new_cost < old_cost - 1e-9:
+                    improved_route[i:j + 1] = reversed(improved_route[i:j + 1])
+                    improved = True
+
+    return improved_route
+
+
+def improve_solution_routes_2opt(
+    solution: List[List[int]],
+    dist: List[List[float]]
+) -> List[List[int]]:
+    """
+    Apply 2-opt improvement independently to every route.
+    """
+    return [
+        two_opt_improve_route(route, dist)
+        if route != [0, 0]
+        else [0, 0]
+        for route in solution
+    ]
+
+
 def is_route_feasible(
     route: List[int],
     demands: Dict[int, int],
@@ -157,25 +204,124 @@ def is_solution_feasible(
 
     return len(errors) == 0, errors
 
+def clarke_wright_initial_solution(instance: CVRPInstance) -> List[List[int]]:
+    """
+    Clarke-Wright Savings heuristic for CVRP.
+
+    Starts with one route per customer:
+        0 -> i -> 0
+
+    Then repeatedly merges routes when the saving is high and capacity allows it.
+
+    This usually gives much better geographically structured routes than
+    capacity-only greedy.
+    """
+    dist = build_distance_matrix(instance)
+
+    customers = [node for node in instance.coordinates.keys() if node != 0]
+
+    routes = {
+        customer: [0, customer, 0]
+        for customer in customers
+    }
+
+    loads = {
+        customer: instance.demands[customer]
+        for customer in customers
+    }
+
+    customer_to_route = {
+        customer: customer
+        for customer in customers
+    }
+
+    savings = []
+
+    for i in customers:
+        for j in customers:
+            if i >= j:
+                continue
+
+            saving = dist[0][i] + dist[0][j] - dist[i][j]
+            savings.append((saving, i, j))
+
+    savings.sort(reverse=True)
+
+    for saving, i, j in savings:
+        route_i_id = customer_to_route[i]
+        route_j_id = customer_to_route[j]
+
+        if route_i_id == route_j_id:
+            continue
+
+        route_i = routes[route_i_id]
+        route_j = routes[route_j_id]
+
+        combined_load = loads[route_i_id] + loads[route_j_id]
+
+        if combined_load > instance.capacity:
+            continue
+
+        new_route = None
+
+        # Case 1: i is at end of route_i, j is at start of route_j
+        if route_i[-2] == i and route_j[1] == j:
+            new_route = route_i[:-1] + route_j[1:]
+
+        # Case 2: j is at end of route_j, i is at start of route_i
+        elif route_j[-2] == j and route_i[1] == i:
+            new_route = route_j[:-1] + route_i[1:]
+
+        # Case 3: both are at the start, reverse route_i
+        elif route_i[1] == i and route_j[1] == j:
+            reversed_i = [0] + list(reversed(route_i[1:-1])) + [0]
+            new_route = reversed_i[:-1] + route_j[1:]
+
+        # Case 4: both are at the end, reverse route_j
+        elif route_i[-2] == i and route_j[-2] == j:
+            reversed_j = [0] + list(reversed(route_j[1:-1])) + [0]
+            new_route = route_i[:-1] + reversed_j[1:]
+
+        if new_route is None:
+            continue
+
+        # Merge route_j into route_i
+        routes[route_i_id] = new_route
+        loads[route_i_id] = combined_load
+
+        del routes[route_j_id]
+        del loads[route_j_id]
+
+        for customer in new_route:
+            if customer != 0:
+                customer_to_route[customer] = route_i_id
+
+    if len(routes) > instance.vehicle_count:
+        raise ValueError(
+            f"Clarke-Wright produced {len(routes)} routes, "
+            f"but only {instance.vehicle_count} vehicles are available."
+        )
+
+    solution = list(routes.values())
+
+    solution = improve_solution_routes_2opt(solution, dist)
+
+    while len(solution) < instance.vehicle_count:
+        solution.append([0, 0])
+
+    feasible, errors = is_solution_feasible(solution, instance)
+
+    if not feasible:
+        raise ValueError(f"Clarke-Wright solution infeasible: {errors}")
+
+    return solution
+
 def greedy_initial_solution(instance: CVRPInstance) -> List[List[int]]:
     """
-    Main greedy initial solution.
-
-    1. First try nearest-neighbor greedy because it gives nicer routes.
-    2. If that fails, use DP capacity-first construction.
-    3. If that fails, use bin-packing fallback.
+    Return the best feasible initial solution among several construction methods.
     """
-    try:
-        return greedy_nearest_initial_solution(instance)
-    except ValueError:
-        pass
-
-    try:
-        return greedy_capacity_dp_initial_solution(instance)
-    except ValueError:
-        pass
-
-    return greedy_bin_packing_initial_solution(instance)
+    candidates = initial_solution_candidates(instance)
+    return candidates[0][1]
 
 def greedy_nearest_initial_solution(instance: CVRPInstance) -> List[List[int]]:
     """
@@ -428,6 +574,66 @@ def greedy_bin_packing_initial_solution(instance: CVRPInstance) -> List[List[int
 
     return solution
 
+def solution_signature(solution: List[List[int]]) -> Tuple[Tuple[int, ...], ...]:
+    """
+    Used to remove duplicate initial solutions.
+    """
+    return tuple(tuple(route) for route in solution)
+
+
+def initial_solution_candidates(instance: CVRPInstance) -> List[Tuple[str, List[List[int]], float]]:
+    """
+    Generate several feasible initial solutions.
+
+    This is important because a good constructive heuristic can still trap
+    local search in a local optimum.
+
+    Returns:
+        [(method_name, solution, cost), ...]
+    sorted by cost.
+    """
+    dist = build_distance_matrix(instance)
+
+    methods = [
+        ("nearest", greedy_nearest_initial_solution),
+        ("clarke_wright", clarke_wright_initial_solution),
+        ("capacity_dp", greedy_capacity_dp_initial_solution),
+        ("bin_packing", greedy_bin_packing_initial_solution),
+    ]
+
+    candidates = []
+    seen = set()
+
+    for method_name, method in methods:
+        try:
+            solution = method(instance)
+            solution = improve_solution_routes_2opt(solution, dist)
+
+            feasible, errors = is_solution_feasible(solution, instance)
+
+            if not feasible:
+                print(f"Initial method {method_name} infeasible:", errors)
+                continue
+
+            signature = solution_signature(solution)
+
+            if signature in seen:
+                continue
+
+            seen.add(signature)
+
+            cost = total_cost(solution, dist)
+            candidates.append((method_name, solution, cost))
+
+        except Exception as e:
+            print(f"Initial method {method_name} failed:", e)
+
+    candidates.sort(key=lambda item: item[2])
+
+    if not candidates:
+        raise ValueError("No feasible initial solution candidates found.")
+
+    return candidates
 
 def print_solution(
     solution: List[List[int]],

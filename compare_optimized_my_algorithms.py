@@ -13,6 +13,8 @@ from cvrp_utils import (
     plot_solution,
 )
 
+from cvrp_local_search import local_search_improvement
+
 from cvrp_sa import simulated_annealing
 from cvrp_tabu import tabu_search
 from cvrp_alns import alns
@@ -134,8 +136,39 @@ def run_instance(vrp_path: Path):
 
     reference_cost = read_reference_cost(str(vrp_path.with_suffix(".sol")))
 
-    candidates = initial_solution_candidates(instance)
-    candidates = candidates[:params["candidate_limit"]]
+    raw_candidates = initial_solution_candidates(instance)
+
+    polished_candidates = []
+    seen = set()
+
+    for name, solution, cost in raw_candidates:
+        polished_solution = local_search_improvement(
+            solution,
+            instance,
+            dist,
+            max_passes=20 if customer_count <= 100 else 10,
+        )
+
+        polished_cost = total_cost(polished_solution, dist)
+
+        signature = tuple(tuple(route) for route in polished_solution)
+
+        if signature in seen:
+            continue
+
+        seen.add(signature)
+
+        feasible, errors = is_solution_feasible(polished_solution, instance)
+
+        if not feasible:
+            print(f"Polished initial method {name} infeasible:", errors)
+            continue
+
+        polished_candidates.append((name, polished_solution, polished_cost))
+
+    polished_candidates.sort(key=lambda item: item[2])
+
+    candidates = polished_candidates[:params["candidate_limit"]]
 
     print("\nInitial solution candidates:")
     for name, solution, cost in candidates:
@@ -190,12 +223,21 @@ def run_instance(vrp_path: Path):
                 },
             )
 
+            polished_solution = local_search_improvement(
+                result.best_solution,
+                instance,
+                dist,
+                max_passes=30 if customer_count <= 100 else 15,
+            )
+
+            polished_cost = total_cost(polished_solution, dist)
+
             sa_runs.append({
-                "cost": result.best_cost,
+                "cost": polished_cost,
                 "time": result.elapsed_time,
                 "seed": seed,
                 "start_name": start_name,
-                "solution": result.best_solution,
+                "solution": polished_solution,
             })
 
     summaries.append(
@@ -223,12 +265,21 @@ def run_instance(vrp_path: Path):
                 },
             )
 
+            polished_solution = local_search_improvement(
+                result.best_solution,
+                instance,
+                dist,
+                max_passes=30 if customer_count <= 100 else 15,
+            )
+
+            polished_cost = total_cost(polished_solution, dist)
+
             tabu_runs.append({
-                "cost": result.best_cost,
+                "cost": polished_cost,
                 "time": result.elapsed_time,
                 "seed": seed,
                 "start_name": start_name,
-                "solution": result.best_solution,
+                "solution": polished_solution,
             })
 
     summaries.append(
@@ -257,12 +308,21 @@ def run_instance(vrp_path: Path):
                 q_max=q_max,
             )
 
+            polished_solution = local_search_improvement(
+                result.best_solution,
+                instance,
+                dist,
+                max_passes=30 if customer_count <= 100 else 15,
+            )
+
+            polished_cost = total_cost(polished_solution, dist)
+
             alns_runs.append({
-                "cost": result.best_cost,
+                "cost": polished_cost,
                 "time": result.elapsed_time,
                 "seed": seed,
                 "start_name": start_name,
-                "solution": result.best_solution,
+                "solution": polished_solution,
             })
 
     summaries.append(
@@ -352,9 +412,9 @@ def main():
         "P-n16-k8.vrp",
         "E-n22-k4.vrp",
         "A-n32-k5.vrp",
-        ##"A-n80-k10.vrp",
-        ##"X-n101-k25.vrp",
-        ##"M-n200-k17.vrp",
+        "A-n80-k10.vrp",
+        "X-n101-k25.vrp",
+        "M-n200-k17.vrp",
     ]
 
     all_rows = []

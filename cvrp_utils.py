@@ -6,6 +6,7 @@ import re
 import matplotlib.pyplot as plt
 
 
+
 @dataclass
 class CVRPInstance:
     """
@@ -24,6 +25,7 @@ class CVRPInstance:
     coordinates: Dict[int, Tuple[float, float]]
     demands: Dict[int, int]
     depot: int = 0
+    edge_weight_type: str = "EXACT_2D"
 
 
 def euclidean_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
@@ -32,19 +34,15 @@ def euclidean_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> floa
 
 
 def build_distance_matrix(instance: CVRPInstance) -> List[List[float]]:
-    """
-    Build full distance matrix.
-
-    dist[i][j] = Euclidean distance between node i and node j.
-    """
     n = len(instance.coordinates)
     dist = [[0.0 for _ in range(n)] for _ in range(n)]
 
     for i in range(n):
         for j in range(n):
-            dist[i][j] = euclidean_distance(
+            dist[i][j] = cvrp_distance(
                 instance.coordinates[i],
-                instance.coordinates[j]
+                instance.coordinates[j],
+                instance.edge_weight_type
             )
 
     return dist
@@ -65,6 +63,23 @@ def route_cost(route: List[int], dist: List[List[float]]) -> float:
         cost += dist[route[i]][route[i + 1]]
 
     return cost
+
+def cvrp_distance(
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    edge_weight_type: str = "EXACT_2D"
+) -> float:
+    distance = math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+
+    edge_weight_type = edge_weight_type.upper()
+
+    if edge_weight_type == "EUC_2D":
+        return int(distance + 0.5)
+
+    if edge_weight_type == "CEIL_2D":
+        return math.ceil(distance)
+
+    return distance
 
 
 def total_cost(solution: List[List[int]], dist: List[List[float]]) -> float:
@@ -145,6 +160,7 @@ def is_route_feasible(
         return False
 
     return route_demand(route, demands) <= capacity
+
 
 
 def is_solution_feasible(
@@ -609,6 +625,7 @@ def initial_solution_candidates(instance: CVRPInstance) -> List[Tuple[str, List[
             solution = method(instance)
             solution = improve_solution_routes_2opt(solution, dist)
 
+
             feasible, errors = is_solution_feasible(solution, instance)
 
             if not feasible:
@@ -718,6 +735,7 @@ def read_vrplib_cvrp(path: str, vehicle_count: Optional[int] = None) -> CVRPInst
     coordinates_original = {}
     demands_original = {}
     depot_original = None
+    edge_weight_type = "EXACT_2D"
 
     section = None
 
@@ -744,6 +762,9 @@ def read_vrplib_cvrp(path: str, vehicle_count: Optional[int] = None) -> CVRPInst
 
             elif upper.startswith("DEPOT_SECTION"):
                 section = "depot"
+
+            elif upper.startswith("EDGE_WEIGHT_TYPE"):
+                edge_weight_type = line.split(":")[-1].strip()
 
             elif upper.startswith("EOF"):
                 break
@@ -814,7 +835,8 @@ def read_vrplib_cvrp(path: str, vehicle_count: Optional[int] = None) -> CVRPInst
         vehicle_count=vehicle_count,
         coordinates=coordinates,
         demands=demands,
-        depot=0
+        depot=0,
+        edge_weight_type = edge_weight_type,
     )
 
 def read_reference_cost(sol_path: str) -> Optional[float]:

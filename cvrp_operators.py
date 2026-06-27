@@ -49,7 +49,6 @@ def normalize_empty_route(route: List[int]) -> List[int]:
     return [0] + customers + [0]
 
 
-
 def relocate_customer(
     solution: List[List[int]],
     instance: CVRPInstance,

@@ -246,6 +246,40 @@ def destroy_longest_route(
 
     return selected
 
+def destroy_random_routes(
+    solution: List[List[int]],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    rng: random.Random,
+    remove_count: int,
+) -> List[int]:
+    """
+    Remove complete routes until approximately remove_count customers are removed.
+
+    This is useful when the current route grouping is bad.
+    It allows ALNS to rebuild entire vehicle routes.
+    """
+    non_empty_routes = [
+        route for route in solution
+        if any(node != 0 for node in route)
+    ]
+
+    if not non_empty_routes:
+        return []
+
+    rng.shuffle(non_empty_routes)
+
+    removed = []
+
+    for route in non_empty_routes:
+        customers = [node for node in route if node != 0]
+        removed.extend(customers)
+
+        if len(removed) >= remove_count:
+            break
+
+    return removed
+
 
 # ============================================================
 # Repair operators
@@ -376,6 +410,67 @@ def repair_regret_2(
 
     return solution
 
+def repair_regret_3(
+    partial_solution: List[List[int]],
+    removed_customers: List[int],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    rng: random.Random,
+) -> Optional[List[List[int]]]:
+    """
+    Regret-3 insertion.
+
+    Similar to regret-2, but compares the best insertion with the third-best.
+    This often works better for difficult CVRP instances because it inserts
+    constrained customers earlier.
+    """
+    solution = copy_solution(partial_solution)
+    remaining = set(removed_customers)
+
+    while remaining:
+        best_customer_choice = None
+
+        for customer in remaining:
+            insertions = find_feasible_insertions(solution, customer, instance, dist)
+
+            if not insertions:
+                continue
+
+            insertions.sort(key=lambda item: item[0])
+
+            best_delta, best_route_index, best_insert_pos = insertions[0]
+
+            if len(insertions) >= 3:
+                third_best_delta = insertions[2][0]
+                regret = third_best_delta - best_delta
+            elif len(insertions) == 2:
+                regret = insertions[1][0] - best_delta
+            else:
+                regret = 10**9
+
+            candidate = (
+                regret,
+                best_delta,
+                customer,
+                best_route_index,
+                best_insert_pos,
+            )
+
+            if best_customer_choice is None or candidate > best_customer_choice:
+                best_customer_choice = candidate
+
+        if best_customer_choice is None:
+            return None
+
+        _, _, customer, route_index, insert_pos = best_customer_choice
+
+        solution = apply_insertion(solution, customer, route_index, insert_pos)
+        remaining.remove(customer)
+
+    return solution
+
+
+
 
 # ============================================================
 # ALNS core
@@ -473,12 +568,14 @@ def alns(
         "worst": destroy_worst,
         "related": destroy_related,
         "longest_route": destroy_longest_route,
+        "random_routes": destroy_random_routes,
     }
 
     repair_operators: Dict[str, Callable] = {
         "greedy_order": repair_greedy_order,
         "cheapest_global": repair_cheapest_global,
         "regret_2": repair_regret_2,
+        "regret_3": repair_regret_3,
     }
 
     destroy_weights = {name: 1.0 for name in destroy_operators}
@@ -532,15 +629,16 @@ def alns(
             rng,
         )
 
-        if candidate_solution is not None:
-            candidate_solution = improve_solution_routes_2opt(candidate_solution, dist)
-
         if candidate_solution is None:
             update_weight(destroy_weights, destroy_name, 0.0, reaction_factor)
             update_weight(repair_weights, repair_name, 0.0, reaction_factor)
             history.append(best_cost)
             temperature *= cooling_rate
             continue
+
+        if candidate_solution is not None:
+            candidate_solution = improve_solution_routes_2opt(candidate_solution, dist)
+
 
         feasible, _ = is_solution_feasible(candidate_solution, instance)
 

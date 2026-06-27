@@ -62,10 +62,10 @@ def get_params(customer_count):
             "tabu_sample": 120,
             "tabu_tenure": 30,
 
-            "alns_iterations": 10000,
+            "alns_iterations": 20000,
             "alns_cooling": 0.9996,
-            "alns_q_min_ratio": 0.04,
-            "alns_q_max_ratio": 0.35,
+            "alns_q_min_ratio": 0.08,
+            "alns_q_max_ratio": 0.55,
         }
 
     return {
@@ -80,10 +80,10 @@ def get_params(customer_count):
         "tabu_sample": 100,
         "tabu_tenure": 40,
 
-        "alns_iterations": 15000,
+        "alns_iterations": 20000,
         "alns_cooling": 0.9997,
-        "alns_q_min_ratio": 0.03,
-        "alns_q_max_ratio": 0.40,
+        "alns_q_min_ratio": 0.05,
+        "alns_q_max_ratio": 0.45,
     }
 
 
@@ -409,9 +409,9 @@ def main():
     results_folder.mkdir(exist_ok=True)
 
     test_files = [
-        "P-n16-k8.vrp",
-        "E-n22-k4.vrp",
-        "A-n32-k5.vrp",
+        ##"P-n16-k8.vrp",
+        ##"E-n22-k4.vrp",
+        ##"A-n32-k5.vrp",
         "A-n80-k10.vrp",
         "X-n101-k25.vrp",
         "M-n200-k17.vrp",

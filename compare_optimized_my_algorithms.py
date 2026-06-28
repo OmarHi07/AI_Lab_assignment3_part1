@@ -26,10 +26,31 @@ def gap_percent(cost, reference_cost):
     return ((cost - reference_cost) / reference_cost) * 100
 
 
-def get_params(customer_count):
+def get_params(instance_name, customer_count):
     """
     Different instance sizes need different search budgets.
     """
+    if instance_name == "X-n101-k25":
+        return {
+            "seeds": [1, 42, 99],
+            "candidate_limit": 1,
+
+            "sa_iterations": 60000,
+            "sa_cooling": 0.9996,
+            "sa_temp_factor": 0.12,
+
+            "tabu_iterations": 2000,
+            "tabu_sample": 80,
+            "tabu_tenure": 30,
+
+            # X-n101-k25 has very tight capacity.
+            # Large destroy sizes hurt repair quality, so we use smaller destroy.
+            "alns_iterations": 15000,
+            "alns_cooling": 0.9996,
+            "alns_q_min_ratio": 0.03,
+            "alns_q_max_ratio": 0.30,
+        }
+
     if customer_count <= 35:
         return {
             "seeds": [1, 7, 42, 99],
@@ -132,7 +153,7 @@ def run_instance(vrp_path: Path):
     dist = build_distance_matrix(instance)
     customer_count = len(instance.coordinates) - 1
 
-    params = get_params(customer_count)
+    params = get_params(instance.name, customer_count)
 
     reference_cost = read_reference_cost(str(vrp_path.with_suffix(".sol")))
 
@@ -412,9 +433,9 @@ def main():
         ##"P-n16-k8.vrp",
         ##"E-n22-k4.vrp",
         ##"A-n32-k5.vrp",
-        "A-n80-k10.vrp",
+        ##"A-n80-k10.vrp",
         "X-n101-k25.vrp",
-        "M-n200-k17.vrp",
+        ##"M-n200-k17.vrp",
     ]
 
     all_rows = []

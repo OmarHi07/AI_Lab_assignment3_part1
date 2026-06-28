@@ -6,6 +6,8 @@ from cvrp_utils import (
     route_cost,
     total_cost,
     improve_solution_routes_2opt,
+    order_route_nearest_neighbor,
+    two_opt_improve_route,
 )
 
 from cvrp_operators import copy_solution, normalize_empty_route
@@ -213,6 +215,147 @@ def local_search_improvement(
                 break
 
         if not improved:
+            break
+
+    return current
+
+
+def build_improved_route_from_customers(
+    customers: List[int],
+    dist: List[List[float]],
+) -> List[int]:
+    """
+    Build a route from a customer group and improve it with 2-opt.
+    """
+    if not customers:
+        return [0, 0]
+
+    route = order_route_nearest_neighbor(customers, dist)
+    route = two_opt_improve_route(route, dist)
+
+    return route
+
+
+def best_two_route_repair_once(
+    solution: List[List[int]],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    max_combined_customers: int = 14,
+) -> Optional[List[List[int]]]:
+    """
+    Best-improvement two-route repair.
+
+    Pick two routes, combine their customers, and try many feasible ways
+    to split them back into two routes.
+
+    This is stronger than simple relocate/swap because it can move several
+    customers between two routes at once.
+    """
+    best_delta = 0.0
+    best_solution = None
+
+    for route_a_idx in range(len(solution)):
+        route_a = solution[route_a_idx]
+        customers_a = [node for node in route_a if node != 0]
+
+        if not customers_a:
+            continue
+
+        for route_b_idx in range(route_a_idx + 1, len(solution)):
+            route_b = solution[route_b_idx]
+            customers_b = [node for node in route_b if node != 0]
+
+            if not customers_b:
+                continue
+
+            combined_customers = customers_a + customers_b
+            combined_count = len(combined_customers)
+
+            # Avoid exponential explosion on very large combined route pairs.
+            if combined_count > max_combined_customers:
+                continue
+
+            old_cost = route_cost(route_a, dist) + route_cost(route_b, dist)
+
+            first_customer = combined_customers[0]
+            remaining_customers = combined_customers[1:]
+
+            number_of_remaining = len(remaining_customers)
+
+            # Force first_customer to be in group A to avoid duplicate symmetric splits.
+            for mask in range(1 << number_of_remaining):
+                group_a = [first_customer]
+                group_b = []
+
+                for bit_index, customer in enumerate(remaining_customers):
+                    if mask & (1 << bit_index):
+                        group_a.append(customer)
+                    else:
+                        group_b.append(customer)
+
+                demand_a = sum(instance.demands[c] for c in group_a)
+                demand_b = sum(instance.demands[c] for c in group_b)
+
+                if demand_a > instance.capacity:
+                    continue
+
+                if demand_b > instance.capacity:
+                    continue
+
+                new_route_a = build_improved_route_from_customers(group_a, dist)
+                new_route_b = build_improved_route_from_customers(group_b, dist)
+
+                new_cost = route_cost(new_route_a, dist) + route_cost(new_route_b, dist)
+
+                delta = new_cost - old_cost
+
+                if delta < best_delta - 1e-9:
+                    candidate_solution = copy_solution(solution)
+                    candidate_solution[route_a_idx] = new_route_a
+                    candidate_solution[route_b_idx] = new_route_b
+
+                    best_delta = delta
+                    best_solution = candidate_solution
+
+    return best_solution
+
+
+def two_route_repair_local_search(
+    solution: List[List[int]],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    max_passes: int = 10,
+    max_combined_customers: int = 14,
+) -> List[List[int]]:
+    """
+    Repeatedly apply two-route repair until no improving pair is found.
+
+    This is useful after ALNS, especially on X-n101-k25, because it can fix
+    poor route grouping that simple relocate/swap may not fix.
+    """
+    current = copy_solution(solution)
+    current = improve_solution_routes_2opt(current, dist)
+
+    current_cost = total_cost(current, dist)
+
+    for _ in range(max_passes):
+        candidate = best_two_route_repair_once(
+            current,
+            instance,
+            dist,
+            max_combined_customers=max_combined_customers,
+        )
+
+        if candidate is None:
+            break
+
+        candidate = improve_solution_routes_2opt(candidate, dist)
+        candidate_cost = total_cost(candidate, dist)
+
+        if candidate_cost < current_cost - 1e-9:
+            current = candidate
+            current_cost = candidate_cost
+        else:
             break
 
     return current

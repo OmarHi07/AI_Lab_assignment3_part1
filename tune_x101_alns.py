@@ -13,7 +13,10 @@ from cvrp_utils import (
 
 from cvrp_capacity_starts import randomized_capacity_dp_candidates
 
-from cvrp_local_search import local_search_improvement
+from cvrp_local_search import (
+    local_search_improvement,
+    two_route_repair_local_search,
+)
 from cvrp_alns import alns
 
 
@@ -46,6 +49,21 @@ def main():
             max_passes=10,
         )
 
+        polished_solution = two_route_repair_local_search(
+            polished_solution,
+            instance,
+            dist,
+            max_passes=5,
+            max_combined_customers=14,
+        )
+
+        polished_solution = local_search_improvement(
+            polished_solution,
+            instance,
+            dist,
+            max_passes=10,
+        )
+
         polished_cost = total_cost(polished_solution, dist)
 
         feasible, errors = is_solution_feasible(polished_solution, instance)
@@ -58,21 +76,13 @@ def main():
     candidates.sort(key=lambda item: item[2])
 
     # Keep only the best few starting solutions to avoid huge runtime.
-    candidates = candidates[:5]
+    candidates = candidates[:2]
 
     print("Initial candidates:")
     for name, solution, cost in candidates:
         print(f"{name:<15} cost={cost:.2f}, gap={gap_percent(cost, reference_cost):.2f}%")
 
     configs = [
-        {
-            "name": "medium_destroy",
-            "iterations": 20000,
-            "temp_factor": 0.10,
-            "cooling": 0.9996,
-            "q_min_ratio": 0.03,
-            "q_max_ratio": 0.30,
-        },
         {
             "name": "medium_hotter",
             "iterations": 25000,
@@ -116,6 +126,21 @@ def main():
 
                 polished_solution = local_search_improvement(
                     result.best_solution,
+                    instance,
+                    dist,
+                    max_passes=15,
+                )
+
+                polished_solution = two_route_repair_local_search(
+                    polished_solution,
+                    instance,
+                    dist,
+                    max_passes=8,
+                    max_combined_customers=14,
+                )
+
+                polished_solution = local_search_improvement(
+                    polished_solution,
                     instance,
                     dist,
                     max_passes=15,

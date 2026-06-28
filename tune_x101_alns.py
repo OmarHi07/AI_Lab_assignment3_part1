@@ -76,7 +76,7 @@ def main():
     candidates.sort(key=lambda item: item[2])
 
     # Keep only the best few starting solutions to avoid huge runtime.
-    candidates = candidates[:2]
+    candidates = candidates[:1]
 
     print("Initial candidates:")
     for name, solution, cost in candidates:
@@ -93,7 +93,7 @@ def main():
         },
     ]
 
-    seeds = [42, 99]
+    seeds = [1,7,42, 99,123]
 
     best_solution = None
     best_cost = float("inf")
@@ -135,8 +135,8 @@ def main():
                     polished_solution,
                     instance,
                     dist,
-                    max_passes=8,
-                    max_combined_customers=14,
+                    max_passes=12,
+                    max_combined_customers=16,
                 )
 
                 polished_solution = local_search_improvement(

@@ -11,11 +11,18 @@ from cvrp_utils import (
     plot_solution,
 )
 
+from cvrp_giant_split import giant_split_candidates
+
+from cvrp_cw_reduction import clarke_wright_reduction_candidates
+
 from cvrp_capacity_starts import randomized_capacity_dp_candidates
 
 from cvrp_local_search import (
     local_search_improvement,
     two_route_repair_local_search,
+    two_opt_star_local_search,
+    group_exchange_local_search,
+    exact_route_polish_solution,
 )
 from cvrp_alns import alns
 
@@ -33,10 +40,17 @@ def main():
 
     raw_candidates = initial_solution_candidates(instance)
 
-    # Add many capacity-feasible variants.
-    # This is important for X-n101-k25 because only capacity-DP works,
-    # but one deterministic capacity-DP start is too limiting.
     raw_candidates.extend(randomized_capacity_dp_candidates(instance))
+
+    try:
+        raw_candidates.extend(giant_split_candidates(instance))
+    except Exception as e:
+        print("Giant split candidates failed:", e)
+
+    try:
+        raw_candidates.extend(clarke_wright_reduction_candidates(instance))
+    except Exception as e:
+        print("Clarke-Wright reduction failed:", e)
 
     # X-n101-k25 usually only has capacity_dp as feasible.
     candidates = []
@@ -74,34 +88,29 @@ def main():
             print("Candidate infeasible:", name, errors)
 
     candidates.sort(key=lambda item: item[2])
+    candidates = candidates[:10]
 
-    # Keep only the best few starting solutions to avoid huge runtime.
-    candidates = candidates[:5]
+    if not candidates:
+        raise ValueError("No feasible initial candidates found.")
+
 
     print("Initial candidates:")
     for name, solution, cost in candidates:
         print(f"{name:<15} cost={cost:.2f}, gap={gap_percent(cost, reference_cost):.2f}%")
 
+
     configs = [
         {
-            "name": "medium_hotter",
+            "name": "current_best",
             "iterations": 25000,
             "temp_factor": 0.15,
             "cooling": 0.9997,
             "q_min_ratio": 0.03,
             "q_max_ratio": 0.35,
-        },
-        {
-            "name": "slightly_larger_destroy",
-            "iterations": 30000,
-            "temp_factor": 0.18,
-            "cooling": 0.9997,
-            "q_min_ratio": 0.04,
-            "q_max_ratio": 0.40,
-        },
+        }
     ]
 
-    seeds = [1,42]
+    seeds = [42]
 
     best_solution = None
     best_cost = float("inf")
@@ -136,22 +145,44 @@ def main():
                     result.best_solution,
                     instance,
                     dist,
-                    max_passes=15,
+                    max_passes=20,
                 )
 
                 polished_solution = two_route_repair_local_search(
                     polished_solution,
                     instance,
                     dist,
-                    max_passes=12,
+                    max_passes=15,
                     max_combined_customers=16,
+                )
+
+                polished_solution = two_opt_star_local_search(
+                    polished_solution,
+                    instance,
+                    dist,
+                    max_passes=20,
+                )
+
+                polished_solution = group_exchange_local_search(
+                    polished_solution,
+                    instance,
+                    dist,
+                    max_passes=10,
+                    max_group_size=2,
+                    max_route_customers=10,
                 )
 
                 polished_solution = local_search_improvement(
                     polished_solution,
                     instance,
                     dist,
-                    max_passes=15,
+                    max_passes=20,
+                )
+
+                polished_solution = exact_route_polish_solution(
+                    polished_solution,
+                    dist,
+                    max_customers=8,
                 )
 
                 polished_cost = total_cost(polished_solution, dist)

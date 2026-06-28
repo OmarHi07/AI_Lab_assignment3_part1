@@ -13,8 +13,10 @@ from cvrp_utils import (
 from cvrp_local_search import (
     local_search_improvement,
     two_route_repair_local_search,
+    exact_route_polish_solution,
+    group_exchange_local_search,
+    two_opt_star_local_search,
 )
-
 
 def gap_percent(cost, reference_cost):
     return ((cost - reference_cost) / reference_cost) * 100
@@ -97,11 +99,33 @@ def main():
             max_combined_customers=config["max_combined"],
         )
 
+        candidate = two_opt_star_local_search(
+            candidate,
+            instance,
+            dist,
+            max_passes=20,
+        )
+
+        candidate = group_exchange_local_search(
+            candidate,
+            instance,
+            dist,
+            max_passes=10,
+            max_group_size=2,
+            max_route_customers=10,
+        )
+
         candidate = local_search_improvement(
             candidate,
             instance,
             dist,
             max_passes=20,
+        )
+
+        candidate = exact_route_polish_solution(
+            candidate,
+            dist,
+            max_customers=8,
         )
 
         feasible, errors = is_solution_feasible(candidate, instance)

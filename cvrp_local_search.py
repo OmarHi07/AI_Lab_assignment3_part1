@@ -10,6 +10,9 @@ from cvrp_utils import (
     two_opt_improve_route,
 )
 
+from itertools import permutations,combinations
+
+
 from cvrp_operators import copy_solution, normalize_empty_route
 
 
@@ -344,6 +347,350 @@ def two_route_repair_local_search(
             instance,
             dist,
             max_combined_customers=max_combined_customers,
+        )
+
+        if candidate is None:
+            break
+
+        candidate = improve_solution_routes_2opt(candidate, dist)
+        candidate_cost = total_cost(candidate, dist)
+
+        if candidate_cost < current_cost - 1e-9:
+            current = candidate
+            current_cost = candidate_cost
+        else:
+            break
+
+    return current
+
+def exact_optimize_route(
+    route: List[int],
+    dist: List[List[float]],
+    max_customers: int = 8,
+) -> List[int]:
+    """
+    Exactly optimize the customer order inside one route.
+
+    This is only used for small routes because brute force is expensive.
+    """
+    customers = [node for node in route if node != 0]
+
+    if not customers:
+        return [0, 0]
+
+    if len(customers) > max_customers:
+        return two_opt_improve_route(route, dist)
+
+    best_route = route[:]
+    best_cost = route_cost(route, dist)
+
+    for ordering in permutations(customers):
+        candidate_route = [0] + list(ordering) + [0]
+        candidate_cost = route_cost(candidate_route, dist)
+
+        if candidate_cost < best_cost:
+            best_cost = candidate_cost
+            best_route = candidate_route
+
+    return best_route
+
+
+def exact_route_polish_solution(
+    solution: List[List[int]],
+    dist: List[List[float]],
+    max_customers: int = 8,
+) -> List[List[int]]:
+    """
+    Apply exact route optimization to every small route.
+    """
+    return [
+        exact_optimize_route(route, dist, max_customers=max_customers)
+        if route != [0, 0]
+        else [0, 0]
+        for route in solution
+    ]
+
+def build_group_exchange_subsets(
+    customers: List[int],
+    max_group_size: int = 2,
+) -> List[Tuple[int, ...]]:
+    """
+    Build all customer subsets of size 1..max_group_size.
+    """
+    subsets = []
+
+    for size in range(1, min(max_group_size, len(customers)) + 1):
+        subsets.extend(combinations(customers, size))
+
+    return subsets
+
+
+def best_group_exchange_once(
+    solution: List[List[int]],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    max_group_size: int = 2,
+    max_route_customers: int = 10,
+) -> Optional[List[List[int]]]:
+    """
+    Best-improvement group exchange between two routes.
+
+    Tries exchanging:
+    - 1 customer for 1 customer
+    - 1 customer for 2 customers
+    - 2 customers for 1 customer
+    - 2 customers for 2 customers
+
+    This helps tight-capacity instances where simple relocate is blocked.
+    """
+    best_delta = 0.0
+    best_solution = None
+
+    for route_a_idx in range(len(solution)):
+        route_a = solution[route_a_idx]
+        customers_a = [node for node in route_a if node != 0]
+
+        if not customers_a:
+            continue
+
+        if len(customers_a) > max_route_customers:
+            continue
+
+        demand_a_total = sum(instance.demands[c] for c in customers_a)
+
+        for route_b_idx in range(route_a_idx + 1, len(solution)):
+            route_b = solution[route_b_idx]
+            customers_b = [node for node in route_b if node != 0]
+
+            if not customers_b:
+                continue
+
+            if len(customers_b) > max_route_customers:
+                continue
+
+            demand_b_total = sum(instance.demands[c] for c in customers_b)
+
+            old_cost = route_cost(route_a, dist) + route_cost(route_b, dist)
+
+            subsets_a = build_group_exchange_subsets(
+                customers_a,
+                max_group_size=max_group_size,
+            )
+
+            subsets_b = build_group_exchange_subsets(
+                customers_b,
+                max_group_size=max_group_size,
+            )
+
+            for group_a in subsets_a:
+                group_a_set = set(group_a)
+                demand_group_a = sum(instance.demands[c] for c in group_a)
+
+                for group_b in subsets_b:
+                    group_b_set = set(group_b)
+                    demand_group_b = sum(instance.demands[c] for c in group_b)
+
+                    new_demand_a = demand_a_total - demand_group_a + demand_group_b
+                    new_demand_b = demand_b_total - demand_group_b + demand_group_a
+
+                    if new_demand_a > instance.capacity:
+                        continue
+
+                    if new_demand_b > instance.capacity:
+                        continue
+
+                    new_customers_a = [
+                        c for c in customers_a
+                        if c not in group_a_set
+                    ] + list(group_b)
+
+                    new_customers_b = [
+                        c for c in customers_b
+                        if c not in group_b_set
+                    ] + list(group_a)
+
+                    new_route_a = build_improved_route_from_customers(
+                        new_customers_a,
+                        dist,
+                    )
+
+                    new_route_b = build_improved_route_from_customers(
+                        new_customers_b,
+                        dist,
+                    )
+
+                    new_cost = route_cost(new_route_a, dist) + route_cost(new_route_b, dist)
+
+                    delta = new_cost - old_cost
+
+                    if delta < best_delta - 1e-9:
+                        candidate_solution = copy_solution(solution)
+                        candidate_solution[route_a_idx] = new_route_a
+                        candidate_solution[route_b_idx] = new_route_b
+
+                        best_delta = delta
+                        best_solution = candidate_solution
+
+    return best_solution
+
+
+def group_exchange_local_search(
+    solution: List[List[int]],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    max_passes: int = 10,
+    max_group_size: int = 2,
+    max_route_customers: int = 10,
+) -> List[List[int]]:
+    """
+    Repeatedly apply best group exchange.
+
+    This is stronger than single-customer swap and is useful for tight CVRP.
+    """
+    current = copy_solution(solution)
+    current = improve_solution_routes_2opt(current, dist)
+
+    current_cost = total_cost(current, dist)
+
+    for _ in range(max_passes):
+        candidate = best_group_exchange_once(
+            current,
+            instance,
+            dist,
+            max_group_size=max_group_size,
+            max_route_customers=max_route_customers,
+        )
+
+        if candidate is None:
+            break
+
+        candidate = improve_solution_routes_2opt(candidate, dist)
+        candidate_cost = total_cost(candidate, dist)
+
+        if candidate_cost < current_cost - 1e-9:
+            current = candidate
+            current_cost = candidate_cost
+        else:
+            break
+
+    return current
+
+def build_route_from_customer_order(customers: List[int]) -> List[int]:
+    """
+    Build a depot-wrapped route from an ordered customer list.
+    """
+    if not customers:
+        return [0, 0]
+
+    return [0] + customers + [0]
+
+
+def best_two_opt_star_once(
+    solution: List[List[int]],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+) -> Optional[List[List[int]]]:
+    """
+    Best-improvement 2-opt* between two routes.
+
+    For two routes:
+        A = prefix_A + suffix_A
+        B = prefix_B + suffix_B
+
+    It swaps the suffixes:
+        new_A = prefix_A + suffix_B
+        new_B = prefix_B + suffix_A
+
+    This changes several customers between routes at once.
+    It is much stronger than single relocate/swap.
+    """
+    best_delta = 0.0
+    best_solution = None
+
+    route_costs = [
+        route_cost(route, dist)
+        for route in solution
+    ]
+
+    for route_a_idx in range(len(solution)):
+        route_a = solution[route_a_idx]
+        customers_a = [node for node in route_a if node != 0]
+
+        for route_b_idx in range(route_a_idx + 1, len(solution)):
+            route_b = solution[route_b_idx]
+            customers_b = [node for node in route_b if node != 0]
+
+            if not customers_a and not customers_b:
+                continue
+
+            old_cost = route_costs[route_a_idx] + route_costs[route_b_idx]
+
+            for cut_a in range(len(customers_a) + 1):
+                prefix_a = customers_a[:cut_a]
+                suffix_a = customers_a[cut_a:]
+
+                for cut_b in range(len(customers_b) + 1):
+                    prefix_b = customers_b[:cut_b]
+                    suffix_b = customers_b[cut_b:]
+
+                    # Skip exact no-change case.
+                    if not suffix_a and not suffix_b:
+                        continue
+
+                    new_customers_a = prefix_a + suffix_b
+                    new_customers_b = prefix_b + suffix_a
+
+                    demand_a = sum(instance.demands[c] for c in new_customers_a)
+                    demand_b = sum(instance.demands[c] for c in new_customers_b)
+
+                    if demand_a > instance.capacity:
+                        continue
+
+                    if demand_b > instance.capacity:
+                        continue
+
+                    new_route_a = build_route_from_customer_order(new_customers_a)
+                    new_route_b = build_route_from_customer_order(new_customers_b)
+
+                    new_route_a = two_opt_improve_route(new_route_a, dist)
+                    new_route_b = two_opt_improve_route(new_route_b, dist)
+
+                    new_cost = (
+                        route_cost(new_route_a, dist)
+                        + route_cost(new_route_b, dist)
+                    )
+
+                    delta = new_cost - old_cost
+
+                    if delta < best_delta - 1e-9:
+                        candidate_solution = copy_solution(solution)
+                        candidate_solution[route_a_idx] = normalize_empty_route(new_route_a)
+                        candidate_solution[route_b_idx] = normalize_empty_route(new_route_b)
+
+                        best_delta = delta
+                        best_solution = candidate_solution
+
+    return best_solution
+
+
+def two_opt_star_local_search(
+    solution: List[List[int]],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    max_passes: int = 20,
+) -> List[List[int]]:
+    """
+    Repeatedly apply best 2-opt* route-segment exchange.
+    """
+    current = copy_solution(solution)
+    current = improve_solution_routes_2opt(current, dist)
+    current_cost = total_cost(current, dist)
+
+    for _ in range(max_passes):
+        candidate = best_two_opt_star_once(
+            current,
+            instance,
+            dist,
         )
 
         if candidate is None:

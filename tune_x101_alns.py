@@ -76,7 +76,7 @@ def main():
     candidates.sort(key=lambda item: item[2])
 
     # Keep only the best few starting solutions to avoid huge runtime.
-    candidates = candidates[:1]
+    candidates = candidates[:5]
 
     print("Initial candidates:")
     for name, solution, cost in candidates:
@@ -91,9 +91,17 @@ def main():
             "q_min_ratio": 0.03,
             "q_max_ratio": 0.35,
         },
+        {
+            "name": "slightly_larger_destroy",
+            "iterations": 30000,
+            "temp_factor": 0.18,
+            "cooling": 0.9997,
+            "q_min_ratio": 0.04,
+            "q_max_ratio": 0.40,
+        },
     ]
 
-    seeds = [1,7,42, 99,123]
+    seeds = [1,42]
 
     best_solution = None
     best_cost = float("inf")

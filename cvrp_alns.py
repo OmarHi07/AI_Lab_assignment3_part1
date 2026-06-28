@@ -280,6 +280,60 @@ def destroy_random_routes(
 
     return removed
 
+def destroy_route_neighborhood(
+    solution: List[List[int]],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    rng: random.Random,
+    remove_count: int,
+) -> List[int]:
+    """
+    Remove one complete route, then remove geographically nearby customers.
+
+    This is more focused than random route removal:
+    it destroys a local region of the solution and lets ALNS rebuild it.
+    """
+    route_customer_groups = [
+        [node for node in route if node != 0]
+        for route in solution
+    ]
+
+    non_empty_groups = [
+        customers for customers in route_customer_groups
+        if customers
+    ]
+
+    if not non_empty_groups:
+        return []
+
+    seed_route_customers = rng.choice(non_empty_groups)
+
+    removed = list(seed_route_customers)
+
+    if len(removed) >= remove_count:
+        return removed
+
+    removed_set = set(removed)
+
+    remaining_customers = [
+        customer
+        for customer in all_customers_in_solution(solution)
+        if customer not in removed_set
+    ]
+
+    related_customers = sorted(
+        remaining_customers,
+        key=lambda customer: min(
+            dist[customer][seed_customer]
+            for seed_customer in seed_route_customers
+        )
+    )
+
+    needed = remove_count - len(removed)
+    removed.extend(related_customers[:needed])
+
+    return removed
+
 
 # ============================================================
 # Repair operators
@@ -469,7 +523,76 @@ def repair_regret_3(
 
     return solution
 
+def repair_regret_3_randomized(
+    partial_solution: List[List[int]],
+    removed_customers: List[int],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    rng: random.Random,
+) -> Optional[List[List[int]]]:
+    """
+    Randomized regret-3 repair.
 
+    At each step, compute the best regret candidates, then randomly choose
+    among the top few. This keeps the repair strong but avoids always rebuilding
+    the exact same solution.
+    """
+    solution = copy_solution(partial_solution)
+    remaining = set(removed_customers)
+
+    while remaining:
+        choices = []
+
+        for customer in remaining:
+            insertions = find_feasible_insertions(solution, customer, instance, dist)
+
+            if not insertions:
+                continue
+
+            insertions.sort(key=lambda item: item[0])
+
+            best_delta, best_route_index, best_insert_pos = insertions[0]
+
+            if len(insertions) >= 3:
+                third_best_delta = insertions[2][0]
+                regret = third_best_delta - best_delta
+            elif len(insertions) == 2:
+                regret = insertions[1][0] - best_delta
+            else:
+                regret = 10**9
+
+            # Larger regret is better, smaller best_delta is better.
+            choices.append(
+                (
+                    regret,
+                    -best_delta,
+                    customer,
+                    best_route_index,
+                    best_insert_pos,
+                )
+            )
+
+        if not choices:
+            return None
+
+        choices.sort(reverse=True)
+
+        top_choices = choices[:min(3, len(choices))]
+
+        weights = list(range(len(top_choices), 0, -1))
+
+        selected = rng.choices(
+            top_choices,
+            weights=weights,
+            k=1,
+        )[0]
+
+        _, _, customer, route_index, insert_pos = selected
+
+        solution = apply_insertion(solution, customer, route_index, insert_pos)
+        remaining.remove(customer)
+
+    return solution
 
 
 # ============================================================
@@ -569,6 +692,7 @@ def alns(
         "related": destroy_related,
         "longest_route": destroy_longest_route,
         "random_routes": destroy_random_routes,
+        "route_neighborhood": destroy_route_neighborhood,
     }
 
     repair_operators: Dict[str, Callable] = {
@@ -576,6 +700,7 @@ def alns(
         "cheapest_global": repair_cheapest_global,
         "regret_2": repair_regret_2,
         "regret_3": repair_regret_3,
+        "regret_3_randomized": repair_regret_3_randomized,
     }
 
     destroy_weights = {name: 1.0 for name in destroy_operators}

@@ -177,18 +177,11 @@ def randomized_capacity_dp_candidates(
 
     orders = []
 
-    # Angle-based orders.
-    offsets = [
-        0.0,
-        math.pi / 8,
-        math.pi / 4,
-        3 * math.pi / 8,
-        math.pi / 2,
-        5 * math.pi / 8,
-        3 * math.pi / 4,
-        7 * math.pi / 8,
-        math.pi,
-    ]
+    # Angle-based orders. Sampled every pi/16 (11.25 deg) instead of pi/8:
+    # capacity_dp_angle_2.75_rev (~7pi/8) has consistently been the strongest
+    # partition found so far, so a denser sweep gives the top-10 selection in
+    # tune_x101_alns.py a better chance at finding an even better one nearby.
+    offsets = [k * math.pi / 16 for k in range(17)]
 
     for offset in offsets:
         orders.append((f"angle_{offset:.2f}_fwd", build_angle_order(instance, offset, False)))

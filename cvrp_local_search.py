@@ -180,6 +180,102 @@ def best_swap_once(
     return new_solution
 
 
+def best_or_opt_once(
+    solution: List[List[int]],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    max_segment_length: int = 3,
+) -> Optional[List[List[int]]]:
+    """
+    Best-improvement Or-opt: relocate a short chain of consecutive customers
+    (length 2..max_segment_length) from one route to another, trying both
+    forward and reversed orientation at the insertion point.
+
+    Single-customer relocation (length 1) is already covered by
+    best_relocate_once, so this only considers segments of length >= 2.
+    """
+    best_delta = 0.0
+    best_move = None
+
+    route_demands = [
+        route_demand(route, instance.demands)
+        for route in solution
+    ]
+
+    for source_idx, source_route in enumerate(solution):
+        customer_count = len(source_route) - 2
+
+        if customer_count < 2:
+            continue
+
+        max_len = min(max_segment_length, customer_count)
+
+        for seg_len in range(2, max_len + 1):
+            for start in range(1, len(source_route) - seg_len):
+                end = start + seg_len - 1
+
+                segment = source_route[start:end + 1]
+                prev_node = source_route[start - 1]
+                next_node = source_route[end + 1]
+
+                segment_demand = sum(instance.demands[c] for c in segment)
+
+                internal_cost = sum(
+                    dist[segment[i]][segment[i + 1]]
+                    for i in range(len(segment) - 1)
+                )
+
+                remove_gain = (
+                    dist[prev_node][segment[0]]
+                    + internal_cost
+                    + dist[segment[-1]][next_node]
+                    - dist[prev_node][next_node]
+                )
+
+                for target_idx, target_route in enumerate(solution):
+                    if target_idx == source_idx:
+                        continue
+
+                    if route_demands[target_idx] + segment_demand > instance.capacity:
+                        continue
+
+                    for insert_pos in range(1, len(target_route)):
+                        before = target_route[insert_pos - 1]
+                        after = target_route[insert_pos]
+
+                        for ordered_segment in (segment, segment[::-1]):
+                            insert_cost = (
+                                dist[before][ordered_segment[0]]
+                                + sum(
+                                    dist[ordered_segment[i]][ordered_segment[i + 1]]
+                                    for i in range(len(ordered_segment) - 1)
+                                )
+                                + dist[ordered_segment[-1]][after]
+                                - dist[before][after]
+                            )
+
+                            delta = insert_cost - remove_gain
+
+                            if delta < best_delta - 1e-9:
+                                new_source_route = (
+                                    source_route[:start] + source_route[end + 1:]
+                                )
+                                new_target_route = (
+                                    target_route[:insert_pos]
+                                    + list(ordered_segment)
+                                    + target_route[insert_pos:]
+                                )
+
+                                candidate_solution = copy_solution(solution)
+                                candidate_solution[source_idx] = normalize_empty_route(new_source_route)
+                                candidate_solution[target_idx] = normalize_empty_route(new_target_route)
+
+                                best_delta = delta
+                                best_move = candidate_solution
+
+    return best_move
+
+
 def local_search_improvement(
     solution: List[List[int]],
     instance: CVRPInstance,

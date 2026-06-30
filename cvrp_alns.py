@@ -334,6 +334,75 @@ def destroy_route_neighborhood(
 
     return removed
 
+def destroy_toxic_segment(
+    solution,
+    instance,
+    dist,
+    rng,
+    remove_count,
+):
+    """
+    Remove customers around the most expensive/toxic route edges.
+
+    Idea:
+    Instead of removing isolated worst customers, find expensive local
+    route areas and remove neighboring customers together. This gives
+    ALNS a chance to rebuild a bad section of a route.
+    """
+    toxic_items = []
+
+    for route in solution:
+        if len(route) <= 3:
+            continue
+
+        for pos in range(1, len(route) - 1):
+            customer = route[pos]
+            prev_node = route[pos - 1]
+            next_node = route[pos + 1]
+
+            saving_if_removed = (
+                dist[prev_node][customer]
+                + dist[customer][next_node]
+                - dist[prev_node][next_node]
+            )
+
+            toxic_items.append((saving_if_removed, route, pos))
+
+    if not toxic_items:
+        return destroy_random(solution, instance, dist, rng, remove_count)
+
+    toxic_items.sort(reverse=True, key=lambda item: item[0])
+
+    removed = []
+    removed_set = set()
+
+    for _, route, pos in toxic_items:
+        if len(removed) >= remove_count:
+            break
+
+        # Remove around the toxic position: previous, current, next customers if possible.
+        candidate_positions = [pos, pos - 1, pos + 1, pos - 2, pos + 2]
+
+        for p in candidate_positions:
+            if len(removed) >= remove_count:
+                break
+            if p <= 0 or p >= len(route) - 1:
+                continue
+
+            customer = route[p]
+            if customer != 0 and customer not in removed_set:
+                removed.append(customer)
+                removed_set.add(customer)
+
+    # If still not enough, fill with random remaining customers.
+    if len(removed) < remove_count:
+        all_customers = all_customers_in_solution(solution)
+        remaining = [c for c in all_customers if c not in removed_set]
+        rng.shuffle(remaining)
+        removed.extend(remaining[: remove_count - len(removed)])
+
+    return removed
+
 
 # ============================================================
 # Repair operators
@@ -595,6 +664,60 @@ def repair_regret_3_randomized(
     return solution
 
 
+def repair_cheapest_global_randomized(
+    partial_solution: List[List[int]],
+    removed_customers: List[int],
+    instance: CVRPInstance,
+    dist: List[List[float]],
+    rng: random.Random,
+) -> Optional[List[List[int]]]:
+    """
+    Randomized cheapest-global insertion.
+
+    Like repair_cheapest_global, but instead of always taking the single
+    best (customer, position) pair, randomly choose among the top few.
+    cheapest_global/regret_2/regret_3 are fully deterministic, so they tend
+    to rebuild the same structures regardless of seed or temperature. This
+    gives ALNS a genuinely randomized strong repair to diversify with.
+    """
+    solution = copy_solution(partial_solution)
+    remaining = set(removed_customers)
+
+    while remaining:
+        choices = []
+
+        for customer in remaining:
+            insertions = find_feasible_insertions(solution, customer, instance, dist)
+
+            if not insertions:
+                continue
+
+            delta, route_index, insert_pos = min(insertions, key=lambda item: item[0])
+            choices.append((delta, customer, route_index, insert_pos))
+
+        if not choices:
+            return None
+
+        choices.sort(key=lambda item: item[0])
+
+        top_choices = choices[:min(3, len(choices))]
+
+        weights = list(range(len(top_choices), 0, -1))
+
+        selected = rng.choices(
+            top_choices,
+            weights=weights,
+            k=1,
+        )[0]
+
+        _, customer, route_index, insert_pos = selected
+
+        solution = apply_insertion(solution, customer, route_index, insert_pos)
+        remaining.remove(customer)
+
+    return solution
+
+
 # ============================================================
 # ALNS core
 # ============================================================
@@ -698,6 +821,7 @@ def alns(
     repair_operators: Dict[str, Callable] = {
         "greedy_order": repair_greedy_order,
         "cheapest_global": repair_cheapest_global,
+        "cheapest_global_randomized": repair_cheapest_global_randomized,
         "regret_2": repair_regret_2,
         "regret_3": repair_regret_3,
         "regret_3_randomized": repair_regret_3_randomized,

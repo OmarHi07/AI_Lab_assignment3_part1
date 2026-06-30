@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 import os
 import re
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
@@ -873,6 +875,28 @@ def read_reference_cost(sol_path: str) -> Optional[float]:
         return None
 
     return None
+
+
+def read_existing_solution_cost(output_path: str) -> Optional[float]:
+    """
+    Read the cost stored on the first line of a previously saved solution
+    file (see write_solution_file), without parsing the routes.
+
+    Returns None if the file does not exist or cannot be parsed.
+    """
+    try:
+        with open(output_path, "r", encoding="utf-8") as file:
+            first_line = file.readline().strip()
+    except FileNotFoundError:
+        return None
+
+    if not first_line:
+        return None
+
+    try:
+        return float(first_line.split()[0])
+    except (ValueError, IndexError):
+        return None
 
 
 def write_solution_file(

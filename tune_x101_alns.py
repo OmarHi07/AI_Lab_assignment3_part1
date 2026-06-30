@@ -7,9 +7,15 @@ from cvrp_utils import (
     initial_solution_candidates,
     total_cost,
     is_solution_feasible,
+    read_existing_solution_cost,
     write_solution_file,
     plot_solution,
 )
+
+# Stable best result for X-n101-k25 achieved so far. A run is only allowed to
+# overwrite the stable output files if it beats this (or the cost already on
+# disk, whichever is lower) strictly.
+STABLE_BEST_COST = 31512.0
 
 from cvrp_giant_split import giant_split_candidates
 
@@ -88,7 +94,26 @@ def main():
             print("Candidate infeasible:", name, errors)
 
     candidates.sort(key=lambda item: item[2])
-    candidates = candidates[:10]
+
+    # capacity_dp_angle_2.75_rev in particular has repeatedly reached the
+    # stable best (31512) after full ALNS + polish despite ranking far
+    # outside the top-10 by this light-polish cost. Force-include known
+    # strong starts so a denser candidate pool can't push them out.
+    must_include_names = {
+        "capacity_dp_angle_2.75_fwd",
+        "capacity_dp_angle_1.18_fwd",
+        "capacity_dp_angle_2.75_rev",
+    }
+
+    selected = candidates[:10]
+    selected_names = {name for name, _, _ in selected}
+
+    for name, solution, cost in candidates:
+        if name in must_include_names and name not in selected_names:
+            selected.append((name, solution, cost))
+            selected_names.add(name)
+
+    candidates = selected
 
     if not candidates:
         raise ValueError("No feasible initial candidates found.")
@@ -110,7 +135,7 @@ def main():
         }
     ]
 
-    seeds = [42]
+    seeds = [1]
 
     best_solution = None
     best_cost = float("inf")
@@ -227,22 +252,34 @@ def main():
     output_folder.mkdir(exist_ok=True)
     plot_folder.mkdir(exist_ok=True)
 
-    write_solution_file(
-        best_solution,
-        dist,
-        str(output_folder / "X-n101-k25_alns_tuned_best.txt"),
-        elapsed_time=best_info["time"],
-    )
+    output_path = output_folder / "X-n101-k25_alns_tuned_best.txt"
+    plot_path = plot_folder / "X-n101-k25_alns_tuned_best.png"
 
-    plot_solution(
-        instance,
-        best_solution,
-        dist,
-        save_path=str(plot_folder / "X-n101-k25_alns_tuned_best.png"),
-        show=False,
-    )
+    existing_cost = read_existing_solution_cost(str(output_path))
+    protected_cost = STABLE_BEST_COST if existing_cost is None else min(existing_cost, STABLE_BEST_COST)
 
-    print("Saved best tuned output and plot.")
+    if best_cost < protected_cost - 1e-6:
+        write_solution_file(
+            best_solution,
+            dist,
+            str(output_path),
+            elapsed_time=best_info["time"],
+        )
+
+        plot_solution(
+            instance,
+            best_solution,
+            dist,
+            save_path=str(plot_path),
+            show=False,
+        )
+
+        print(f"NEW STABLE BEST! Saved best tuned output and plot (cost={best_cost:.2f}).")
+    else:
+        print(
+            f"No improvement over stable best ({protected_cost:.2f}). "
+            "Stable output files left untouched."
+        )
 
 
 if __name__ == "__main__":
